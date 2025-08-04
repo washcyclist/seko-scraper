@@ -279,18 +279,17 @@ def main():
             page.click('a.stat-tab[href="#laundry-cycles"]')
             page.wait_for_timeout(2500)
 
-            # Set to show recent data (last 2 days to catch any delayed entries)
-            page.click('label:has-text("Last 2 Days")')
+            # For hourly updates, get today's data plus yesterday to catch delayed entries
+            page.click('label:has-text("Today")')
             page.wait_for_timeout(2000)
             page.select_option('select[name="cycletable_length"]', value='-1')
             page.wait_for_timeout(2300)
-
-            # Wait for table and extract data
+            
+            # Get today's data first
             page.wait_for_selector('#cycletable', state='visible')
             page.wait_for_timeout(2500)
-
-            # Extract rows
-            rows = page.eval_on_selector_all(
+            
+            today_rows = page.eval_on_selector_all(
                 '#cycletable tbody tr',
                 '''
                     rows => rows.map(row => {
@@ -299,6 +298,36 @@ def main():
                     })
                 '''
             )
+            
+            print(f"📊 Found {len(today_rows)} rows for today")
+            
+            # Also get yesterday's data to catch any delayed completions
+            print("📅 Getting yesterday's data...")
+            page.click('label:has-text("Yesterday")')
+            page.wait_for_timeout(2000)
+            page.select_option('select[name="cycletable_length"]', value='-1')
+            page.wait_for_timeout(2300)
+
+            # Wait for table and extract yesterday's data
+            page.wait_for_selector('#cycletable', state='visible')
+            page.wait_for_timeout(2500)
+
+            # Extract yesterday's rows
+            yesterday_rows = page.eval_on_selector_all(
+                '#cycletable tbody tr',
+                '''
+                    rows => rows.map(row => {
+                    const cells = Array.from(row.querySelectorAll("td"));
+                    return cells.map(cell => cell.innerText.trim());
+                    })
+                '''
+            )
+            
+            print(f"📊 Found {len(yesterday_rows)} rows for yesterday")
+            
+            # Combine both datasets
+            rows = today_rows + yesterday_rows
+            print(f"📊 Total combined rows: {len(rows)}")
 
             browser.close()
 
