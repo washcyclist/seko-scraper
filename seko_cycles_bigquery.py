@@ -197,11 +197,11 @@ def transform_row_data(row_data):
         print(f"⚠️ Could not create cycle ID")
         return None
     
-    # Transform data
+    # Transform data - convert datetime objects to ISO format strings
     transformed = {
         "cycle_id": cycle_id,
-        "start_time": start_time,
-        "end_time": end_time,
+        "start_time": start_time.isoformat(),  # Convert to ISO string
+        "end_time": end_time.isoformat() if end_time else None,  # Convert to ISO string or None
         "duration_minutes": duration_minutes,
         "device_name": row_data[1] if row_data[1] else None,
         "formula_name": row_data[2] if row_data[2] else None,
@@ -216,7 +216,7 @@ def transform_row_data(row_data):
         "excess_time_minutes": parse_duration_to_minutes(row_data[12]),
         "idle_time_minutes": parse_duration_to_minutes(row_data[13]),
         "is_completed": is_completed,
-        "last_updated": datetime.now(timezone.utc),
+        "last_updated": datetime.now(timezone.utc).isoformat(),  # Convert to ISO string
     }
     
     return transformed
