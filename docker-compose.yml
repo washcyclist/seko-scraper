@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   seko-cycles:
-    image: yourdockerhubusername/seko-cycles:latest  # You need to build and push this first
+    image: ghcr.io/yourusername/seko-cycles-scraper:latest  # You need to build and push this first
     networks:
       - web-internal
     environment:
