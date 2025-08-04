@@ -30,7 +30,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Playwright browsers
+# Install Playwright browsers BEFORE setting custom path
 RUN python -m playwright install chromium
 RUN python -m playwright install-deps
 
@@ -79,9 +79,6 @@ cron -f' > /entrypoint.sh && chmod +x /entrypoint.sh
 # Set timezone
 ENV TZ=America/New_York
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
-
-# Set environment for Playwright
-ENV PLAYWRIGHT_BROWSERS_PATH=/app/pw-browsers
 
 # Run the entrypoint script
 ENTRYPOINT ["/entrypoint.sh"]

@@ -7,7 +7,6 @@ services:
       - web-internal
     environment:
       - TZ=America/New_York
-      - PLAYWRIGHT_BROWSERS_PATH=/app/pw-browsers
     secrets:
       - bigquery_credentials
       - seko_env_file
