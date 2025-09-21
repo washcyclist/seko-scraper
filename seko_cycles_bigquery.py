@@ -221,29 +221,49 @@ def transform_row_data(row_data):
     
     return transformed
 
-def upload_to_bigquery(client, rows_to_upload):
-    """Upload transformed rows to BigQuery"""
-    if not rows_to_upload:
+def upload_to_bigquery(client, new_rows, updated_rows):
+    """Upload transformed rows to BigQuery with proper deduplication"""
+    if not new_rows and not updated_rows:
         print("📊 No new rows to upload")
         return
-    
+
     try:
         table_ref = client.dataset(DATASET_ID).table(TABLE_ID)
         table = client.get_table(table_ref)
-        
-        # Use WRITE_TRUNCATE for updates to existing cycle_ids
-        job_config = bigquery.LoadJobConfig()
-        job_config.write_disposition = bigquery.WriteDisposition.WRITE_APPEND
-        
-        # Insert rows
-        errors = client.insert_rows_json(table, rows_to_upload)
-        
-        if not errors:
-            print(f"✅ Successfully uploaded {len(rows_to_upload)} rows to BigQuery")
-        else:
-            print(f"❌ BigQuery upload errors: {errors}")
-            raise Exception(f"BigQuery upload failed: {errors}")
-    
+
+        # Handle new rows - simple insert
+        if new_rows:
+            errors = client.insert_rows_json(table, new_rows)
+            if errors:
+                print(f"❌ BigQuery insert errors for new rows: {errors}")
+                raise Exception(f"BigQuery insert failed: {errors}")
+            print(f"✅ Successfully inserted {len(new_rows)} new rows")
+
+        # Handle updated rows - delete old then insert new to avoid duplicates
+        if updated_rows:
+            # First, delete existing rows for these cycle_ids
+            cycle_ids_to_update = [row['cycle_id'] for row in updated_rows]
+            cycle_ids_str = "', '".join(cycle_ids_to_update)
+
+            delete_query = f"""
+            DELETE FROM `{PROJECT_ID}.{DATASET_ID}.{TABLE_ID}`
+            WHERE cycle_id IN ('{cycle_ids_str}')
+            """
+
+            print(f"🗑️ Deleting {len(cycle_ids_to_update)} existing rows for update...")
+            delete_job = client.query(delete_query)
+            delete_job.result()  # Wait for completion
+
+            # Then insert the updated rows
+            errors = client.insert_rows_json(table, updated_rows)
+            if errors:
+                print(f"❌ BigQuery insert errors for updated rows: {errors}")
+                raise Exception(f"BigQuery update failed: {errors}")
+            print(f"✅ Successfully updated {len(updated_rows)} rows")
+
+        total_uploaded = len(new_rows) + len(updated_rows)
+        print(f"✅ Successfully processed {total_uploaded} total rows to BigQuery")
+
     except Exception as e:
         print(f"❌ Failed to upload to BigQuery: {e}")
         raise
@@ -342,20 +362,22 @@ def main():
             
             cycle_id = transformed["cycle_id"]
             
-            # Check if this is new or an update to incomplete cycle
+            # Check if this is new or needs updating
             if cycle_id not in existing_cycles:
+                # Completely new cycle
                 new_rows.append(transformed)
-            elif not existing_cycles[cycle_id] and transformed["is_completed"]:
-                # This was incomplete before, now it's complete - update it
+            elif existing_cycles[cycle_id] != transformed["is_completed"]:
+                # Completion status changed - update it
                 updated_rows.append(transformed)
+            # Skip if cycle exists and completion status hasn't changed
         
-        # Upload new and updated rows
-        all_uploads = new_rows + updated_rows
-        if all_uploads:
-            upload_to_bigquery(client, all_uploads)
+        # Upload new and updated rows with proper deduplication
+        if new_rows or updated_rows:
+            upload_to_bigquery(client, new_rows, updated_rows)
             
         duration = datetime.now() - start_time
-        message = f"Processed {len(rows)} rows, uploaded {len(all_uploads)} ({len(new_rows)} new, {len(updated_rows)} updated)"
+        total_uploaded = len(new_rows) + len(updated_rows)
+        message = f"Processed {len(rows)} rows, uploaded {total_uploaded} ({len(new_rows)} new, {len(updated_rows)} updated)"
         print(f"✅ {message} in {duration.total_seconds():.1f}s")
         notify_uptime_kuma("up", message)
         
