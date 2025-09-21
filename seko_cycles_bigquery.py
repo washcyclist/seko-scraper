@@ -164,7 +164,7 @@ def get_existing_cycle_ids(client):
         query = f"""
         SELECT cycle_id, is_completed
         FROM `{PROJECT_ID}.{DATASET_ID}.{TABLE_ID}`
-        WHERE start_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)
+        WHERE start_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 DAY)
         """
         
         results = client.query(query).result()
@@ -172,7 +172,7 @@ def get_existing_cycle_ids(client):
         for row in results:
             existing_cycles[row.cycle_id] = row.is_completed
         
-        print(f"📊 Found {len(existing_cycles)} existing cycles in last 7 days")
+        print(f"📊 Found {len(existing_cycles)} existing cycles in last 2 days")
         return existing_cycles
     
     except Exception as e:
@@ -241,7 +241,7 @@ def upload_to_bigquery(client, new_rows, updated_rows):
 
         # Handle updated rows - delete old then insert new to avoid duplicates
         if updated_rows:
-            # First, delete existing rows for these cycle_ids
+            # First, try to delete existing rows for these cycle_ids
             cycle_ids_to_update = [row['cycle_id'] for row in updated_rows]
             cycle_ids_str = "', '".join(cycle_ids_to_update)
 
@@ -250,9 +250,18 @@ def upload_to_bigquery(client, new_rows, updated_rows):
             WHERE cycle_id IN ('{cycle_ids_str}')
             """
 
-            print(f"🗑️ Deleting {len(cycle_ids_to_update)} existing rows for update...")
-            delete_job = client.query(delete_query)
-            delete_job.result()  # Wait for completion
+            print(f"🗑️ Attempting to delete {len(cycle_ids_to_update)} existing rows for update...")
+            try:
+                delete_job = client.query(delete_query)
+                delete_job.result()  # Wait for completion
+                print(f"✅ Successfully deleted existing rows")
+            except Exception as delete_error:
+                if "streaming buffer" in str(delete_error).lower():
+                    print(f"⚠️ Cannot delete from streaming buffer, will create duplicates temporarily")
+                    print(f"   Run cleanup_duplicates.py later to remove duplicates")
+                else:
+                    print(f"❌ Delete failed: {delete_error}")
+                    raise delete_error
 
             # Then insert the updated rows
             errors = client.insert_rows_json(table, updated_rows)
@@ -365,11 +374,15 @@ def main():
             # Check if this is new or needs updating
             if cycle_id not in existing_cycles:
                 # Completely new cycle
+                print(f"🆕 New cycle: {cycle_id} (completed: {transformed['is_completed']})")
                 new_rows.append(transformed)
             elif existing_cycles[cycle_id] != transformed["is_completed"]:
                 # Completion status changed - update it
+                print(f"🔄 Update cycle: {cycle_id} ({existing_cycles[cycle_id]} → {transformed['is_completed']})")
                 updated_rows.append(transformed)
-            # Skip if cycle exists and completion status hasn't changed
+            else:
+                # Skip if cycle exists and completion status hasn't changed
+                print(f"⏭️ Skip cycle: {cycle_id} (no change, completed: {transformed['is_completed']})")
         
         # Upload new and updated rows with proper deduplication
         if new_rows or updated_rows:
