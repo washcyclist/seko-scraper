@@ -239,36 +239,86 @@ def upload_to_bigquery(client, new_rows, updated_rows):
                 raise Exception(f"BigQuery insert failed: {errors}")
             print(f"✅ Successfully inserted {len(new_rows)} new rows")
 
-        # Handle updated rows - delete old then insert new to avoid duplicates
+        # Handle updated rows using MERGE to avoid streaming buffer issues
         if updated_rows:
-            # First, try to delete existing rows for these cycle_ids
-            cycle_ids_to_update = [row['cycle_id'] for row in updated_rows]
-            cycle_ids_str = "', '".join(cycle_ids_to_update)
+            print(f"🔄 Using MERGE to update {len(updated_rows)} rows (avoids streaming buffer issues)...")
 
-            delete_query = f"""
-            DELETE FROM `{PROJECT_ID}.{DATASET_ID}.{TABLE_ID}`
-            WHERE cycle_id IN ('{cycle_ids_str}')
-            """
+            # Create a temporary table with the updated data
+            temp_table_id = f"{TABLE_ID}_temp_{int(datetime.now().timestamp())}"
+            temp_table_ref = client.dataset(DATASET_ID).table(temp_table_id)
 
-            print(f"🗑️ Attempting to delete {len(cycle_ids_to_update)} existing rows for update...")
             try:
-                delete_job = client.query(delete_query)
-                delete_job.result()  # Wait for completion
-                print(f"✅ Successfully deleted existing rows")
-            except Exception as delete_error:
-                if "streaming buffer" in str(delete_error).lower():
-                    print(f"⚠️ Cannot delete from streaming buffer, will create duplicates temporarily")
-                    print(f"   Run cleanup_duplicates.py later to remove duplicates")
-                else:
-                    print(f"❌ Delete failed: {delete_error}")
-                    raise delete_error
+                # Create temporary table with updated rows
+                job_config = bigquery.LoadJobConfig()
+                job_config.write_disposition = bigquery.WriteDisposition.WRITE_TRUNCATE
 
-            # Then insert the updated rows
-            errors = client.insert_rows_json(table, updated_rows)
-            if errors:
-                print(f"❌ BigQuery insert errors for updated rows: {errors}")
-                raise Exception(f"BigQuery update failed: {errors}")
-            print(f"✅ Successfully updated {len(updated_rows)} rows")
+                # Define schema to ensure proper data types
+                job_config.schema = [
+                    bigquery.SchemaField("cycle_id", "STRING", mode="REQUIRED"),
+                    bigquery.SchemaField("start_time", "TIMESTAMP", mode="REQUIRED"),
+                    bigquery.SchemaField("end_time", "TIMESTAMP", mode="NULLABLE"),
+                    bigquery.SchemaField("duration_minutes", "FLOAT", mode="NULLABLE"),
+                    bigquery.SchemaField("device_name", "STRING", mode="NULLABLE"),
+                    bigquery.SchemaField("formula_name", "STRING", mode="NULLABLE"),
+                    bigquery.SchemaField("washer", "STRING", mode="NULLABLE"),
+                    bigquery.SchemaField("customer", "STRING", mode="NULLABLE"),
+                    bigquery.SchemaField("weight_numeric", "FLOAT", mode="NULLABLE"),
+                    bigquery.SchemaField("optin_flex", "FLOAT", mode="NULLABLE"),
+                    bigquery.SchemaField("optin_alka", "FLOAT", mode="NULLABLE"),
+                    bigquery.SchemaField("optin_proxy", "FLOAT", mode="NULLABLE"),
+                    bigquery.SchemaField("optin_citra", "FLOAT", mode="NULLABLE"),
+                    bigquery.SchemaField("viva_turbulent", "FLOAT", mode="NULLABLE"),
+                    bigquery.SchemaField("excess_time_minutes", "FLOAT", mode="NULLABLE"),
+                    bigquery.SchemaField("idle_time_minutes", "FLOAT", mode="NULLABLE"),
+                    bigquery.SchemaField("is_completed", "BOOLEAN", mode="REQUIRED"),
+                    bigquery.SchemaField("last_updated", "TIMESTAMP", mode="REQUIRED"),
+                ]
+
+                load_job = client.load_table_from_json(
+                    updated_rows, temp_table_ref, job_config=job_config
+                )
+                load_job.result()  # Wait for completion
+
+                # Use MERGE to update existing rows
+                merge_query = f"""
+                MERGE `{PROJECT_ID}.{DATASET_ID}.{TABLE_ID}` AS target
+                USING `{PROJECT_ID}.{DATASET_ID}.{temp_table_id}` AS source
+                ON target.cycle_id = source.cycle_id
+                WHEN MATCHED THEN
+                  UPDATE SET
+                    start_time = source.start_time,
+                    end_time = source.end_time,
+                    duration_minutes = source.duration_minutes,
+                    device_name = source.device_name,
+                    formula_name = source.formula_name,
+                    washer = source.washer,
+                    customer = source.customer,
+                    weight_numeric = source.weight_numeric,
+                    optin_flex = source.optin_flex,
+                    optin_alka = source.optin_alka,
+                    optin_proxy = source.optin_proxy,
+                    optin_citra = source.optin_citra,
+                    viva_turbulent = source.viva_turbulent,
+                    excess_time_minutes = source.excess_time_minutes,
+                    idle_time_minutes = source.idle_time_minutes,
+                    is_completed = source.is_completed,
+                    last_updated = source.last_updated
+                WHEN NOT MATCHED THEN
+                  INSERT (cycle_id, start_time, end_time, duration_minutes, device_name, formula_name, washer, customer, weight_numeric, optin_flex, optin_alka, optin_proxy, optin_citra, viva_turbulent, excess_time_minutes, idle_time_minutes, is_completed, last_updated)
+                  VALUES (source.cycle_id, source.start_time, source.end_time, source.duration_minutes, source.device_name, source.formula_name, source.washer, source.customer, source.weight_numeric, source.optin_flex, source.optin_alka, source.optin_proxy, source.optin_citra, source.viva_turbulent, source.excess_time_minutes, source.idle_time_minutes, source.is_completed, source.last_updated)
+                """
+
+                merge_job = client.query(merge_query)
+                merge_job.result()  # Wait for completion
+
+                print(f"✅ Successfully updated {len(updated_rows)} rows using MERGE")
+
+            finally:
+                # Clean up temporary table
+                try:
+                    client.delete_table(temp_table_ref)
+                except Exception:
+                    pass  # Ignore cleanup errors
 
         total_uploaded = len(new_rows) + len(updated_rows)
         print(f"✅ Successfully processed {total_uploaded} total rows to BigQuery")
@@ -279,10 +329,10 @@ def upload_to_bigquery(client, new_rows, updated_rows):
 
 def main():
     start_time = datetime.now()
-    script_version = "v2.1-dedup-fixed-2025-09-21"
+    script_version = "v2.2-merge-fix-2025-09-21"
     print(f"🚀 Starting SEKO cycles scrape at {start_time}")
     print(f"📋 Script version: {script_version}")
-    print(f"🔧 Deduplication: ENABLED (2-day window, delete-then-insert)")
+    print(f"🔧 Deduplication: ENABLED (2-day window, MERGE-based updates)")
     
     try:
         # Setup BigQuery
@@ -393,7 +443,7 @@ def main():
             
         duration = datetime.now() - start_time
         total_uploaded = len(new_rows) + len(updated_rows)
-        message = f"v2.1-dedup: Processed {len(rows)} rows, uploaded {total_uploaded} ({len(new_rows)} new, {len(updated_rows)} updated)"
+        message = f"v2.2-merge: Processed {len(rows)} rows, uploaded {total_uploaded} ({len(new_rows)} new, {len(updated_rows)} updated)"
         print(f"✅ {message} in {duration.total_seconds():.1f}s")
         notify_uptime_kuma("up", message)
         
