@@ -279,7 +279,10 @@ def upload_to_bigquery(client, new_rows, updated_rows):
 
 def main():
     start_time = datetime.now()
+    script_version = "v2.1-dedup-fixed-2025-09-21"
     print(f"🚀 Starting SEKO cycles scrape at {start_time}")
+    print(f"📋 Script version: {script_version}")
+    print(f"🔧 Deduplication: ENABLED (2-day window, delete-then-insert)")
     
     try:
         # Setup BigQuery
@@ -390,7 +393,7 @@ def main():
             
         duration = datetime.now() - start_time
         total_uploaded = len(new_rows) + len(updated_rows)
-        message = f"Processed {len(rows)} rows, uploaded {total_uploaded} ({len(new_rows)} new, {len(updated_rows)} updated)"
+        message = f"v2.1-dedup: Processed {len(rows)} rows, uploaded {total_uploaded} ({len(new_rows)} new, {len(updated_rows)} updated)"
         print(f"✅ {message} in {duration.total_seconds():.1f}s")
         notify_uptime_kuma("up", message)
         
