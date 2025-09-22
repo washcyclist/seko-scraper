@@ -231,13 +231,39 @@ def upload_to_bigquery(client, new_rows, updated_rows):
         table_ref = client.dataset(DATASET_ID).table(TABLE_ID)
         table = client.get_table(table_ref)
 
-        # Handle new rows - simple insert
+        # Handle new rows - use load job instead of streaming inserts
         if new_rows:
-            errors = client.insert_rows_json(table, new_rows)
-            if errors:
-                print(f"❌ BigQuery insert errors for new rows: {errors}")
-                raise Exception(f"BigQuery insert failed: {errors}")
-            print(f"✅ Successfully inserted {len(new_rows)} new rows")
+            print(f"📤 Using load job to insert {len(new_rows)} new rows (avoids streaming buffer)...")
+
+            job_config = bigquery.LoadJobConfig()
+            job_config.write_disposition = bigquery.WriteDisposition.WRITE_APPEND
+            job_config.source_format = bigquery.SourceFormat.NEWLINE_DELIMITED_JSON
+
+            # Define schema to ensure proper data types
+            job_config.schema = [
+                bigquery.SchemaField("cycle_id", "STRING", mode="REQUIRED"),
+                bigquery.SchemaField("start_time", "TIMESTAMP", mode="REQUIRED"),
+                bigquery.SchemaField("end_time", "TIMESTAMP", mode="NULLABLE"),
+                bigquery.SchemaField("duration_minutes", "FLOAT", mode="NULLABLE"),
+                bigquery.SchemaField("device_name", "STRING", mode="NULLABLE"),
+                bigquery.SchemaField("formula_name", "STRING", mode="NULLABLE"),
+                bigquery.SchemaField("washer", "STRING", mode="NULLABLE"),
+                bigquery.SchemaField("customer", "STRING", mode="NULLABLE"),
+                bigquery.SchemaField("weight_numeric", "FLOAT", mode="NULLABLE"),
+                bigquery.SchemaField("optin_flex", "FLOAT", mode="NULLABLE"),
+                bigquery.SchemaField("optin_alka", "FLOAT", mode="NULLABLE"),
+                bigquery.SchemaField("optin_proxy", "FLOAT", mode="NULLABLE"),
+                bigquery.SchemaField("optin_citra", "FLOAT", mode="NULLABLE"),
+                bigquery.SchemaField("viva_turbulent", "FLOAT", mode="NULLABLE"),
+                bigquery.SchemaField("excess_time_minutes", "FLOAT", mode="NULLABLE"),
+                bigquery.SchemaField("idle_time_minutes", "FLOAT", mode="NULLABLE"),
+                bigquery.SchemaField("is_completed", "BOOLEAN", mode="REQUIRED"),
+                bigquery.SchemaField("last_updated", "TIMESTAMP", mode="REQUIRED"),
+            ]
+
+            load_job = client.load_table_from_json(new_rows, table, job_config=job_config)
+            load_job.result()  # Wait for completion
+            print(f"✅ Successfully inserted {len(new_rows)} new rows using load job")
 
         # Handle updated rows using MERGE to avoid streaming buffer issues
         if updated_rows:
@@ -329,10 +355,10 @@ def upload_to_bigquery(client, new_rows, updated_rows):
 
 def main():
     start_time = datetime.now()
-    script_version = "v2.2-merge-fix-2025-09-21"
+    script_version = "v2.3-no-streaming-2025-09-22"
     print(f"🚀 Starting SEKO cycles scrape at {start_time}")
     print(f"📋 Script version: {script_version}")
-    print(f"🔧 Deduplication: ENABLED (2-day window, MERGE-based updates)")
+    print(f"🔧 Deduplication: ENABLED (2-day window, load jobs + MERGE, no streaming buffer)")
     
     try:
         # Setup BigQuery
@@ -443,7 +469,7 @@ def main():
             
         duration = datetime.now() - start_time
         total_uploaded = len(new_rows) + len(updated_rows)
-        message = f"v2.2-merge: Processed {len(rows)} rows, uploaded {total_uploaded} ({len(new_rows)} new, {len(updated_rows)} updated)"
+        message = f"v2.3-no-streaming: Processed {len(rows)} rows, uploaded {total_uploaded} ({len(new_rows)} new, {len(updated_rows)} updated)"
         print(f"✅ {message} in {duration.total_seconds():.1f}s")
         notify_uptime_kuma("up", message)
         
