@@ -5,22 +5,8 @@ RUN apt-get update && apt-get install -y \
     wget \
     gnupg \
     git \
-    libgconf-2-4 \
-    libatk1.0-0 \
-    libatk-bridge2.0-0 \
-    libcups2 \
-    libdrm2 \
-    libxkbcommon0 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxfixes3 \
-    libxrandr2 \
-    libgbm1 \
-    libasound2 \
-    libpango-1.0-0 \
-    libpangocairo-1.0-0 \
-    libgtk-3-0 \
     cron \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
@@ -30,9 +16,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Playwright browsers BEFORE setting custom path
-RUN python -m playwright install chromium
-RUN python -m playwright install-deps
+# Install Playwright browsers and dependencies
+RUN python -m playwright install --with-deps chromium
 
 # Copy Python script
 COPY seko_cycles_bigquery.py ./
